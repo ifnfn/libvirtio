@@ -59,6 +59,14 @@ struct virtio_blk_req {
 	uint64_t  sector;
 };
 
+struct virtio_blk_req_data {
+    struct virtio_blk_req *blkhdr;
+    uint64_t blkhdr_pa;
+    uint8_t *status;
+    uint64_t status_pa;
+    void *data;
+};
+
 /* Block request types */
 #define VIRTIO_BLK_T_IN			0
 #define VIRTIO_BLK_T_OUT		1
@@ -73,7 +81,7 @@ struct virtio_blk_req {
 
 extern int virtioblk_init(struct virtio_device *dev);
 extern void virtioblk_shutdown(struct virtio_device *dev);
-extern int virtioblk_transfer(struct virtio_device *dev, char *buf,
+extern int virtioblk_transfer(struct virtio_device *dev, struct virtio_blk_req_data *data, char *buf,
                               uint64_t blocknum, long cnt, unsigned int type);
 
 #endif  /* _VIRTIO_BLK_H */

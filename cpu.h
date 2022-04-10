@@ -25,7 +25,7 @@ static inline void barrier(void)
 
 static inline void sync(void)
 {
-  asm volatile("fence iorw,iorw" :::"memory");
+  asm volatile ("dsb sy" : : : "memory");
 }
 #define mb() sync()
 
@@ -33,6 +33,9 @@ static inline void flush_cache(void* r, long n)
 {
   // TODO
 }
+
+#define dsb(opt) do { asm volatile("dsb " # opt ::: "memory"); } while (0)
+#define dmb(opt) do { asm volatile("dmb " # opt ::: "memory"); } while (0)
 
 #endif /* __ASSEMBLER__ */
 

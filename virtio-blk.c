@@ -118,22 +118,14 @@ static void fill_blk_hdr(struct virtio_blk_req *blkhdr, bool is_modern,
  * @return number of blocks that have been transfered successfully
  */
 int
-virtioblk_transfer(struct virtio_device *dev, char *buf, uint64_t blocknum,
+virtioblk_transfer(struct virtio_device *dev, struct virtio_blk_req_data *data, char *buf, uint64_t blocknum,
                    long cnt, unsigned int type)
 {
 	int id;
-	static struct virtio_blk_req blkhdr;
-	//struct virtio_blk_config *blkconf;
 	uint64_t capacity;
-	uint32_t time;
 	struct vqs *vq = &dev->vq[0];
-	volatile uint8_t status = -1;
-	volatile uint16_t *current_used_idx;
-	uint16_t last_used_idx, avail_idx;
+	uint16_t avail_idx;
 	int blk_size = DEFAULT_SECTOR_SIZE;
-
-	//printf("virtioblk_transfer: dev=%p buf=%p blocknum=%lli cnt=%li type=%i\n",
-	//	dev, buf, blocknum, cnt, type);
 
 	/* Check whether request is within disk capacity */
 	capacity = virtio_get_config(dev,
@@ -151,21 +143,17 @@ virtioblk_transfer(struct virtio_device *dev, char *buf, uint64_t blocknum,
 		fprintf(stderr, "virtio-blk: Unaligned sector size %d\n", blk_size);
 		return 0;
 	}
-
-	avail_idx = virtio_modern16_to_cpu(dev, vq->avail->idx);
-
-	last_used_idx = vq->used->idx;
-	current_used_idx = &vq->used->idx;
+	avail_idx = virtio_modern16_to_cpu(dev, vq->avail->idx) % vq->size;
 
 	/* Set up header */
-	fill_blk_hdr(&blkhdr, dev->features, type | VIRTIO_BLK_T_BARRIER,
+	fill_blk_hdr(data->blkhdr, dev->features, type,
 		     1, blocknum * blk_size / DEFAULT_SECTOR_SIZE);
 
 	/* Determine descriptor index */
 	id = (avail_idx * 3) % vq->size;
 
 	/* Set up virtqueue descriptor for header */
-	virtio_fill_desc(vq, id, dev->features, (uint64_t)&blkhdr,
+	virtio_fill_desc(vq, id, dev->features,  (uint64_t)data->blkhdr_pa,
 			 sizeof(struct virtio_blk_req),
 			 VRING_DESC_F_NEXT, id + 1);
 
@@ -177,7 +165,7 @@ virtioblk_transfer(struct virtio_device *dev, char *buf, uint64_t blocknum,
 
 	/* Set up virtqueue descriptor for status */
 	virtio_fill_desc(vq, id + 2, dev->features,
-			 (uint64_t)&status, 1,
+			 (uint64_t)data->status_pa, 1,
 			 VRING_DESC_F_WRITE, 0);
 
 	vq->avail->ring[avail_idx % vq->size] = virtio_cpu_to_modern16 (dev, id);
@@ -186,25 +174,6 @@ virtioblk_transfer(struct virtio_device *dev, char *buf, uint64_t blocknum,
 
 	/* Tell HV that the queue is ready */
 	virtio_queue_notify(dev, 0);
-
-	/* Wait for host to consume the descriptor */
-	time = SLOF_GetTimer() + VIRTIO_TIMEOUT;
-	while (*current_used_idx == last_used_idx) {
-		// do something better
-		mb();
-		if (time < SLOF_GetTimer())
-			break;
-	}
-
-	virtio_free_desc(vq, id, dev->features);
-	virtio_free_desc(vq, id + 1, dev->features);
-	virtio_free_desc(vq, id + 2, dev->features);
-
-	if (status == 0)
-		return cnt;
-
-	printf("virtioblk_transfer failed! type=%i, status = %i\n",
-	       type, status);
 
 	return 0;
 }

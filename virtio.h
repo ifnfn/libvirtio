@@ -23,7 +23,9 @@
 #define VIRTIO_STAT_NEEDS_RESET		64
 #define VIRTIO_STAT_FAILED		128
 
+#ifndef BIT
 #define BIT(x) (1UL << (x))
+#endif
 
 /* VIRTIO 1.0 Device independent feature bits */
 #define VIRTIO_F_RING_INDIRECT_DESC	BIT(28)
@@ -89,6 +91,7 @@ struct virtio_cap {
 struct vqs {
 	uint32_t size;
 	void *buf_mem;
+	uint64_t pa;
 	struct vring_desc *desc;
 	struct vring_avail *avail;
 	struct vring_used *used;
@@ -126,6 +129,8 @@ typedef struct {
 
 extern unsigned long virtio_vring_size(unsigned int qsize);
 extern unsigned int virtio_get_qsize(struct virtio_device *dev, int queue);
+extern unsigned int virtio_get_qsize_max(struct virtio_device *dev, int queue);
+extern void virtio_set_qsize(struct virtio_device *dev, uint32_t q, uint32_t qs);
 extern struct vring_desc *virtio_get_vring_desc(struct virtio_device *dev, int queue);
 extern struct vring_avail *virtio_get_vring_avail(struct virtio_device *dev, int queue);
 extern struct vring_used *virtio_get_vring_used(struct virtio_device *dev, int queue);
@@ -152,4 +157,6 @@ extern int __virtio_read_config(struct virtio_device *dev, void *dst,
 extern void virtio_get_interrupt_status(struct virtio_device *dev, uint32_t *status);
 extern void virtio_interrupt_ack(struct virtio_device *dev, uint32_t ack);
 extern void virtio_queue_ready(struct virtio_device *dev, int queue);
+extern uint32_t virtio_read_queue_ready(struct virtio_device *dev, uint32_t queue);
+
 #endif /* _LIBVIRTIO_H */

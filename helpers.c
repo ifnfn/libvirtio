@@ -19,40 +19,41 @@
  */
 
 #include <stdio.h>
+#include <stdlib.h>
+#include <core/helpers.h>
+
 #include "helpers.h"
 
-#include <FreeRTOS.h>
-#include "task.h"
+#if 1
+// #include <FreeRTOS.h>
+// #include "task.h"
 
-#define pdUS_TO_TICKS( xTimeInUs ) ( ( TickType_t ) ( ( ( TickType_t ) ( xTimeInUs ) * ( TickType_t ) configTICK_RATE_HZ ) / ( TickType_t ) 1000000 ) )
+// #define pdUS_TO_TICKS( xTimeInUs ) ( ( TickType_t ) ( ( ( TickType_t ) ( xTimeInUs ) * ( TickType_t ) configTICK_RATE_HZ ) / ( TickType_t ) 1000000 ) )
+
+struct cma *slof_cma;
+#define CMA_SIZE 0x200000ul
 
 void *SLOF_alloc_mem(size_t size)
 {
-	return pvPortMalloc(size);
+    return malloc(size);
 }
 
-void* SLOF_alloc_mem_aligned(size_t size, size_t alignment) {
-  void* address = NULL;
-  size_t new_size = (size + alignment + sizeof(void*));
-
-  if (alignment < portBYTE_ALIGNMENT)
-    alignment = portBYTE_ALIGNMENT;
-
-  address = pvPortMalloc(new_size);
-
-  void **ptr = (void**)((uintptr_t)(address + alignment + sizeof(void*)) & ~(alignment - 1));
-  ptr[-1] = address;
-  return ptr;
+void *SLOF_alloc_mem_aligned(size_t size, size_t alignment, uint64_t *pa)
+{
+    assert(slof_cma);
+    return (void*)cma_alloc(slof_cma, size, pa);
+    // return aligned_alloc(size, alignment);
 }
 
 void SLOF_free_mem(void *addr, long size)
 {
-	vPortFree(addr);
+    free(addr);
 }
 
 void SLOF_free_mem_aligned(void *addr)
 {
-    vPortFree(((void**) addr)[-1]);
+    assert(slof_cma);
+    cma_free(slof_cma, (vaddr_t)addr);
 }
 
 long SLOF_dma_map_in(void *virt, long size, int cacheable)
@@ -81,16 +82,36 @@ void SLOF_dma_map_out(long phys, void *virt, long size)
  */
 uint32_t SLOF_GetTimer(void)
 {
-    uint64_t us = portGET_RUN_TIME_COUNTER_VALUE();
-    return (uint32_t) (us / 1000);
+    // uint64_t us = portGET_RUN_TIME_COUNTER_VALUE();
+    uint64_t us = 0;
+    return (uint32_t)(us / 1000);
+}
+
+static int lx_sleep(unsigned long delay_us)
+{
+    static unsigned long timer_ep = 0;
+    int err = 0;
+    if (timer_ep == 0) {
+        err = sys_svc_wait("/dev/timer0", SVC_WAIT_EXACT, &timer_ep);
+        if (err){
+            return err;
+        }
+    }
+    struct timespec tv = { 0 };
+    tv.tv_sec = 0;
+    tv.tv_nsec = delay_us * 1000;
+    err = sys_timer_sleep(timer_ep, &tv);
+    return err;
 }
 
 void SLOF_msleep(uint32_t time)
 {
-  vTaskDelay( pdMS_TO_TICKS ( time ) );
+    lx_sleep((unsigned long)time*1000);
 }
 
 void SLOF_usleep(uint32_t time)
 {
-  vTaskDelay( pdUS_TO_TICKS ( time ) );
+    lx_sleep(time);
 }
+
+#endif

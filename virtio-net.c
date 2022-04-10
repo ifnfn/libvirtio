@@ -44,7 +44,7 @@
 # define dprintf(fmt...)
 #endif
 
-#define sync()  asm volatile ("fence o, i" ::: "memory")
+// #define sync()  asm volatile ("fence o, i" ::: "memory")
 
 #define DRIVER_FEATURE_SUPPORT  (VIRTIO_NET_F_MAC | VIRTIO_F_VERSION_1)
 
@@ -182,7 +182,7 @@ static int virtionet_init(struct virtio_net *vnet)
 	 * and those form a single buffer.
 	*/
 	vq_rx->buf_mem = SLOF_alloc_mem_aligned((BUFFER_ENTRY_SIZE+net_hdr_size)
-				   * queue_size / 2 , 8);
+				   * queue_size / 2 , 8, &vq_rx->pa);
 	if (!vq_rx->buf_mem) {
 		printf("virtionet: Failed to allocate rx buffers!\n");
 		goto dev_error;
@@ -190,7 +190,7 @@ static int virtionet_init(struct virtio_net *vnet)
 
 	/* Allocate memory for half of queue_size for the transmit buffers. */
 	vq_tx->buf_mem = SLOF_alloc_mem_aligned((BUFFER_ENTRY_SIZE)
-				    * queue_size / 2, 8);
+				    * queue_size / 2, 8, &vq_tx->pa);
 	if (!vq_tx->buf_mem) {
 		printf("virtionet: Failed to allocate tx buffers!\n");
 		goto dev_error;
@@ -292,7 +292,7 @@ static int virtionet_xmit(struct virtio_net *vnet, char *buf, int len)
 	int id, idx;
 	const static struct virtio_net_hdr_v1 nethdr_v1 = {0};
 	const static struct virtio_net_hdr nethdr_legacy = {0};
-	void *nethdr = &nethdr_legacy;
+	const void *nethdr = &nethdr_legacy;
 	struct virtio_device *vdev = &vnet->vdev;
 	struct vqs *vq_tx = &vdev->vq[VQ_TX];
 

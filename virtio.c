@@ -250,18 +250,15 @@ struct virtio_device *virtio_setup_vd(void *device_base)
 		printf("Failed to allocate memory");
 		return NULL;
 	}
+	dev->mmio_base = device_base;
 
 	// Read the full 64-bit device features field
-	virtio_mmio_write32(device_base, VIRTIO_MMIO_HOST_FEATURES_SEL, 0);
-	features = virtio_mmio_read32(device_base, VIRTIO_MMIO_HOST_FEATURES);
-		virtio_mmio_write32(device_base, VIRTIO_MMIO_HOST_FEATURES_SEL, 1);
-	features |= ((uint64_t) virtio_mmio_read32(device_base, VIRTIO_MMIO_HOST_FEATURES) << 32);
+	features = virtio_get_host_features(dev);
 	if (features & VIRTIO_F_VERSION_1) {
 		dev->features = VIRTIO_F_VERSION_1;
 		dev->mmio_base = device_base;
 	} else {
 		dev->features = 0;
-		dev->mmio_base = device_base;
 		virtio_mmio_write32(device_base, VIRTIO_MMIO_GUEST_PAGE_SIZE, 0x1000);
 	}
 	sync();
@@ -281,6 +278,19 @@ unsigned long virtio_vring_size(unsigned int qsize)
 			 sizeof(struct vring_used_elem) * qsize);
 }
 
+unsigned int virtio_get_qsize_max(struct virtio_device *dev, int queue)
+{
+	virtio_mmio_write32(dev->mmio_base, VIRTIO_MMIO_QUEUE_SEL, queue);
+	sync();
+
+	return virtio_mmio_read32(dev->mmio_base, VIRTIO_MMIO_QUEUE_NUM_MAX);
+}
+
+void virtio_set_qsize(struct virtio_device *dev, uint32_t q, uint32_t qs)
+{
+    virtio_mmio_write32(dev->mmio_base, VIRTIO_MMIO_QUEUE_SEL, q);
+    virtio_mmio_write32(dev->mmio_base, VIRTIO_MMIO_QUEUE_NUM, qs);
+}
 
 /**
  * Get number of elements in a vring
@@ -473,7 +483,7 @@ void virtio_queue_notify(struct virtio_device *dev, int queue)
 /**
  * Set queue address
  */
-static void virtio_set_qaddr(struct virtio_device *dev, int queue, uint64_t qaddr)
+static void virtio_set_qaddr(struct virtio_device *dev, int queue, struct vqs *vq)
 {
 #ifdef VIRTIO_USE_PCI
 	if (dev->features & VIRTIO_F_VERSION_1) {
@@ -517,16 +527,13 @@ static void virtio_set_qaddr(struct virtio_device *dev, int queue, uint64_t qadd
 	sync();
 
 	if (dev->features & VIRTIO_F_VERSION_1) {
-		uint64_t q_desc = qaddr;
-		uint64_t q_avail;
-		uint64_t q_used;
-		uint32_t q_size = virtio_get_qsize(dev, queue);
+		uint64_t q_desc = vq->pa + ((uint64_t)vq->desc - (uint64_t)vq->desc);
+		uint64_t q_avail = vq->pa + ((uint64_t)vq->avail - (uint64_t)vq->desc);
+		uint64_t q_used = vq->pa + ((uint64_t)vq->used - (uint64_t)vq->desc);
 
-		q_avail = q_desc + q_size * sizeof(struct vring_desc);
-		q_used = VQ_ALIGN(q_avail + sizeof(struct vring_avail) + sizeof(uint16_t) * q_size);
-
-		virtio_mmio_write32(dev->mmio_base, VIRTIO_MMIO_QUEUE_DESC_LOW, (qaddr & UINT32_MAX));
-		virtio_mmio_write32(dev->mmio_base, VIRTIO_MMIO_QUEUE_DESC_HIGH, (((uint64_t) qaddr >> 32) & UINT32_MAX));
+		virtio_mmio_write32(dev->mmio_base, VIRTIO_MMIO_QUEUE_SEL, queue);
+		virtio_mmio_write32(dev->mmio_base, VIRTIO_MMIO_QUEUE_DESC_LOW, (q_desc & UINT32_MAX));
+		virtio_mmio_write32(dev->mmio_base, VIRTIO_MMIO_QUEUE_DESC_HIGH, (((uint64_t) q_desc >> 32) & UINT32_MAX));
 
 		// Avail
 		virtio_mmio_write32(dev->mmio_base, VIRTIO_MMIO_QUEUE_AVAIL_LOW, (q_avail & UINT32_MAX));
@@ -536,11 +543,28 @@ static void virtio_set_qaddr(struct virtio_device *dev, int queue, uint64_t qadd
 		virtio_mmio_write32(dev->mmio_base, VIRTIO_MMIO_QUEUE_USED_LOW, (q_used & UINT32_MAX));
 		virtio_mmio_write32(dev->mmio_base, VIRTIO_MMIO_QUEUE_USED_HIGH, (((uint64_t) q_used >> 32) & UINT32_MAX));
 	} else {
-		virtio_mmio_write32(dev->mmio_base, VIRTIO_MMIO_QUEUE_PFN, qaddr >> 12);
+		virtio_mmio_write32(dev->mmio_base, VIRTIO_MMIO_QUEUE_PFN, vq->pa >> 12);
 		virtio_mmio_write32(dev->mmio_base, VIRTIO_MMIO_QUEUE_NUM, 1024);
 		virtio_mmio_write32(dev->mmio_base, VIRTIO_MMIO_QUEUE_ALIGN, 0x1000);
 	}
 #endif
+}
+
+static inline void virtq_init(struct vqs *vq, unsigned int num, void *p,
+			      unsigned long align)
+{
+	vq->size = num;
+	vq->desc = p;
+	vq->avail = p + num*sizeof(struct vring_desc);
+	vq->used = (void *)(((unsigned long)&vq->avail->ring[num] + sizeof(uint16_t)
+		+ align-1) & ~(align - 1));
+}
+
+static inline unsigned virtq_size(unsigned int num, unsigned long align)
+{
+	return ((sizeof(struct vring_desc) * num + sizeof(uint16_t) * (3 + num)
+		 + align - 1) & ~(align - 1))
+		+ sizeof(uint16_t) * 3 + sizeof(struct vring_used_elem) * num;
 }
 
 struct vqs *virtio_queue_init_vq(struct virtio_device *dev, unsigned int id)
@@ -555,8 +579,8 @@ struct vqs *virtio_queue_init_vq(struct virtio_device *dev, unsigned int id)
 
 	memset(vq, 0, sizeof(*vq));
 
-	vq->size = virtio_get_qsize(dev, id);
-	vq->desc = SLOF_alloc_mem_aligned(virtio_vring_size(vq->size), 4096);
+	vq->size = virtio_get_qsize_max(dev, id);
+	vq->desc = SLOF_alloc_mem_aligned(virtio_vring_size(vq->size), 4096, &vq->pa);
 	if (!vq->desc) {
 		printf("memory allocation failed!\n");
 		return NULL;
@@ -586,13 +610,14 @@ struct vqs *virtio_queue_init_vq(struct virtio_device *dev, unsigned int id)
 #endif
 
 	memset(vq->desc, 0, virtio_vring_size(vq->size));
-	virtio_set_qaddr(dev, id, (uint64_t)vq->desc);
-
+	virtio_set_qsize(dev, id, vq->size);
+	virtio_set_qaddr(dev, id, vq);
+	virtio_queue_ready(dev, 0);
 	vq->avail->flags = virtio_cpu_to_modern16(dev, VRING_AVAIL_F_NO_INTERRUPT);
 	vq->avail->idx = 0;
 	if (dev->features & VIRTIO_F_IOMMU_PLATFORM)
 		vq->desc_gpas = SLOF_alloc_mem_aligned(
-			vq->size * sizeof(vq->desc_gpas[0]), 4096);
+			vq->size * sizeof(vq->desc_gpas[0]), 4096, NULL);
 
 	return vq;
 }
@@ -748,12 +773,10 @@ uint64_t virtio_get_host_features(struct virtio_device *dev)
 #elif VIRTIO_USE_MMIO
 	// Read the full 64-bit device features field
 	uint64_t features = 0;
-	virtio_mmio_write32(dev->mmio_base, VIRTIO_MMIO_HOST_FEATURES_SEL, 0);
-	sync();
-	features = virtio_mmio_read32(dev->mmio_base, VIRTIO_MMIO_HOST_FEATURES);
 	virtio_mmio_write32(dev->mmio_base, VIRTIO_MMIO_HOST_FEATURES_SEL, 1);
-	sync();
-	features |= ((uint64_t) virtio_mmio_read32(dev->mmio_base, VIRTIO_MMIO_HOST_FEATURES) << 32);
+	features = ((uint64_t) virtio_mmio_read32(dev->mmio_base, VIRTIO_MMIO_HOST_FEATURES) << 32);
+	virtio_mmio_write32(dev->mmio_base, VIRTIO_MMIO_HOST_FEATURES_SEL, 0);
+	features |= virtio_mmio_read32(dev->mmio_base, VIRTIO_MMIO_HOST_FEATURES);
 	return features;
 #endif
 }
@@ -769,6 +792,8 @@ int virtio_negotiate_guest_features(struct virtio_device *dev, uint64_t features
 		fprintf(stderr, "Device does not support virtio 1.0 %llx\n", host_features);
 		return -1;
 	}
+	host_features &= ~BIT(12); // ~ VIRTIO_BLK_F_MQ
+	features |= host_features;
 
 	if (host_features & VIRTIO_F_IOMMU_PLATFORM)
 		features |= VIRTIO_F_IOMMU_PLATFORM;

@@ -24,7 +24,7 @@ extern void SLOF_usleep(uint32_t time);
 extern void *SLOF_dma_alloc(long size);
 extern void SLOF_dma_free(void *virt, long size);
 extern void *SLOF_alloc_mem(size_t size);
-extern void *SLOF_alloc_mem_aligned(size_t size, size_t align);
+extern void *SLOF_alloc_mem_aligned(size_t size, size_t align, uint64_t *pa);
 extern void SLOF_free_mem(void *addr, long size);
 extern void SLOF_free_mem_aligned(void *addr);
 extern long SLOF_dma_map_in(void *virt, long size, int cacheable);
@@ -51,8 +51,16 @@ extern unsigned long SLOF_get_vtpm_unit(void);
 #define container_of(ptr, type, member) ({                      \
 			const typeof(((type *)0)->member)* struct_ptr = (ptr); \
 			(type *)((char *)struct_ptr - offset_of(type, member)); })
-#define ARRAY_SIZE(x) (sizeof(x) / sizeof(x[0]))
-#define ROUNDUP(x,v) ((((x) + ((v) - 1)) / (v)) * (v))
-#define MAX(x,y) ((x) > (y) ? (x) : (y))
+
+#ifndef ARRAY_SIZE
+	#define ARRAY_SIZE(x) (sizeof(x) / sizeof(x[0]))
+#endif
+
+#ifndef ROUNDUP
+	#define ROUNDUP(x,v) ((((x) + ((v) - 1)) / (v)) * (v))
+#endif
+#ifndef MAX
+	#define MAX(x,y) ((x) > (y) ? (x) : (y))
+#endif
 
 #endif
